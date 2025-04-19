@@ -6,7 +6,7 @@ from .offsetcoder import OffsetEncodeNet, OffsetDecodeNet
 
 from models.dcn.deform_conv import DeformConv as DCNv1
 
-
+from .fusion import noise_attention_Module
 class FeatureEncoder(nn.Module):
     '''
     Feature Encoder
@@ -14,15 +14,25 @@ class FeatureEncoder(nn.Module):
 
     def __init__(self, nf=out_channel_M):
         super(FeatureEncoder, self).__init__()
+        self.conv1_1 = nn.Conv2d(3, nf, 5, 1, 2)
         self.conv1 = nn.Conv2d(3, nf, 5, 2, 2)
+        self.conv2_1 = nn.Conv2d(nf, nf, 5, 1, 2)
         self.conv2 = nn.Conv2d(nf, nf, 5, 2, 2)
+        self.conv3_1 = nn.Conv2d(nf, nf, 5, 1, 2)
+        self.conv3 = nn.Conv2d(nf, nf, 5, 1, 2)
         self.lrelu = nn.LeakyReLU(negative_slope=0.1)
         self.feature_extraction = Resblocks(nf)
-
+        self.NA_module=noise_attention_Module(nf)
     def forward(self, x):
+        x =self.conv1_1(x)+x
         x = self.conv1(x)
+        x = self.NA_module(x)
+        x = self.conv2_1(x) + x
         x = self.conv2(x)
-
+        x = self.NA_module(x)
+        x = self.conv3_1(x) + x
+        x = self.conv3(x)
+        x = self.NA_module(x)
         return self.feature_extraction(x)
 
 
