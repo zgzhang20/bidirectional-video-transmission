@@ -240,6 +240,119 @@ class information_de(nn.Module):  # 原图降维
 
         return es_f, es_b, res, pred
 
+class DownsampleLayer(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(DownsampleLayer, self).__init__()
+        self.Conv_BN_ReLU_2 = nn.Sequential(
+            nn.Conv2d(in_channels=in_ch, out_channels=out_ch, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=out_ch, out_channels=out_ch, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU()
+        )
+        self.downsample = nn.Sequential(
+            nn.Conv2d(in_channels=out_ch, out_channels=out_ch, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU()
+        )
+
+    def forward(self, x):
+        """
+        :param x:
+        :return: out输出到深层，out_2输入到下一层，
+        """
+        out = self.Conv_BN_ReLU_2(x)
+        out_2 = self.downsample(out)
+        return out, out_2
+
+
+class UpSampleLayer(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        # 512-1024-512
+        # 1024-512-256
+        # 512-256-128
+        # 256-128-64
+        super(UpSampleLayer, self).__init__()
+        self.Conv_BN_ReLU_2 = nn.Sequential(
+            nn.Conv2d(in_channels=in_ch, out_channels=out_ch * 2, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_ch * 2),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=out_ch * 2, out_channels=out_ch * 2, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_ch * 2),
+            nn.ReLU()
+        )
+        self.upsample = nn.Sequential(
+            nn.ConvTranspose2d(in_channels=out_ch * 2, out_channels=out_ch, kernel_size=3, stride=2, padding=1,
+                               output_padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU()
+        )
+
+    def forward(self, x, out):
+        '''
+        :param x: 输入卷积层
+        :param out:与上采样层进行cat
+        :return:
+        '''
+        x_out = self.Conv_BN_ReLU_2(x)
+        x_out = self.upsample(x_out)
+        # print(x_out.shape)
+        # print(out.shape)
+        cat_out = torch.cat((x_out, out), dim=1)
+        return cat_out
+class UNet(nn.Module):
+    def __init__(self):
+        super(UNet, self).__init__()
+        out_channels = [2 ** (i + 6) for i in range(5)]  # [64, 128, 256, 512, 1024]
+        # 下采样
+        # self.d1=DownsampleLayer(3,out_channels[0])#3-64
+        # self.d2=DownsampleLayer(out_channels[0],out_channels[1])#64-128
+        self.d3 = DownsampleLayer(out_channels[1], out_channels[2])  # 128-256
+        self.d4 = DownsampleLayer(out_channels[2], out_channels[3])  # 256-512
+        # 上采样
+        self.u1 = UpSampleLayer(out_channels[3], out_channels[3])  # 512-1024-512
+        self.u2 = UpSampleLayer(out_channels[4], out_channels[2])  # 1024-512-256
+        self.u3 = UpSampleLayer(out_channels[3], out_channels[1])  # 512-256-128
+        # self.u4=UpSampleLayer(out_channels[2],out_channels[0])#256-128-64
+        # 输出
+        self.o1 = nn.Sequential(
+            nn.Conv2d(out_channels[3], out_channels[2], kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_channels[2]),
+            nn.ReLU())
+        self.o2 = nn.Sequential(
+            nn.Conv2d(out_channels[2], out_channels[1], kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_channels[1]),
+            nn.ReLU())
+        self.o3 = nn.Sequential(
+            nn.Conv2d(out_channels[1], out_channels[1], 3, 1, 1),
+            #nn.Sigmoid(),
+            nn.ReLU())
+
+        self.AF_Module1 = AF_Module(256)
+        self.AF_Module2 = AF_Module(128)
+        # self.AF_Module1 = AF_Module(32)
+
+    def forward(self, x, n_var):
+        # out_1,out1=self.d1(x)
+        # out_2,out2=self.d2(out1)
+        out_3, out3 = self.d3(x)
+        out_4, out4 = self.d4(out3)
+        # print(out_4.shape,out4.shape)
+        out5 = self.u1(out4, out_4)
+        out6 = self.u2(out5, out_3)
+        # out7=self.u3(out6,out_2)
+        # out8=self.u4(out7,out_1)
+        # print(out6.shape)
+        out = self.o1(out6)
+        out = self.AF_Module1(out, n_var)
+
+        out = self.o2(out)
+        out = self.AF_Module2(out, n_var)
+
+        out = self.o3(out)
+        # print(out.shape)
+        return out
 
 class recons_mid_forw(nn.Module):  # 原图降维
     def __init__(self, ):
@@ -293,7 +406,7 @@ class recons_mid_forw(nn.Module):  # 原图降维
             nn.Conv2d(in_channels=8, out_channels=3, kernel_size=3, padding=1, stride=1
                       ))
         self.relu = nn.PReLU()
-
+        self.UNet = UNet()
         self.sigmoid = nn.Sigmoid()
         self.softmax = nn.Softmax(dim=1)
         # self.AF_Module = noise_attention_Module(128)
@@ -323,7 +436,7 @@ class recons_mid_forw(nn.Module):  # 原图降维
         x = self.igdn1(x)
         x = self.relu(x)
         x = self.AF_Module1(x, n_var)
-
+        x = self.UNet(x, n_var)
         out = x
         residual = out
         out = self.D1(out)
@@ -507,6 +620,8 @@ class perfect_channel(nn.Module):  # 原图降维
         x1 = self.trb1(x1)
 
         return x1
+
+
 
 
 class Encoder_dense(nn.Module):  # 原图降维
