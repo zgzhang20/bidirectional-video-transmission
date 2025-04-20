@@ -35,7 +35,7 @@ class FeatureEncoder(nn.Module):
         x = self.conv3_1(x)
         x = self.conv3(x)+ x
         x = self.NA_module(x, n_var)
-        # return self.feature_extraction(x)
+        return self.feature_extraction(x)
         return x
 
 class FeatureDecoder(nn.Module):
